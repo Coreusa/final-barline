@@ -1,4 +1,4 @@
 export interface DataSeriesInterface {
-  label: string;
-  values: number[];
+	label: string;
+	values: number[];
 }
