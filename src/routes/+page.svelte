@@ -9,7 +9,7 @@
 	];
 </script>
 
-<h1>Barline Example</h1>
+<h1>Final Barline</h1>
 
 <Barline
 	data={chartData}
