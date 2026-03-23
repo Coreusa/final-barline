@@ -6,12 +6,19 @@ A high-performance SVG Chart library for Svelte 5. Supports bar and line type of
 
 ```sh
 # install Final Barline
-pnpm / npm install final-barline
+#pnpm
+pnpm add @coreusa/final-barline
+
+# or npm
+npm install @coreusa/final-barline
+
+# or yarn
+yarn add @coreusa/final-barline
 ```
 
 ```sh
 # import the component
-import Barline from '@coreusa/barline';
+import Barline from '@coreusa/final-barline';
 ```
 
 ```sh
