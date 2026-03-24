@@ -4,13 +4,13 @@
 
 A high-performance SVG Chart library for Svelte 5. Supports bar and line type of graphs with option to export the graph and a wide support for customization. Responsive by default.
 
-**NOTE**: Final Barline is in early development. Please file [issues](https://github.com/Coreusa/final-barline/issues) and we'll get to them as soon as we can. 
+**NOTE**: Final Barline is in early development 🛠️. Please file [issues](https://github.com/Coreusa/final-barline/issues) and we'll get to them as soon as we can. 
 
 <img width="630" height="496" alt="image" src="https://github.com/user-attachments/assets/ffe674c0-9fbc-4799-87ec-9bf275faa361" />
 
 <img width="630" height="496" alt="image" src="https://github.com/user-attachments/assets/2d67a102-5b6b-42f7-a49d-f5fcac708da7" />
 
-## General use
+## Get started
 
 ```sh
 # install Final Barline
@@ -23,6 +23,8 @@ npm install @coreusa/final-barline
 # or yarn
 yarn add @coreusa/final-barline
 ```
+
+## General use
 
 ```sh
 # import the component
@@ -42,7 +44,10 @@ import { Barline } from '@coreusa/final-barline';
 	yMaxValuePadding={1}
 />
 ```
-Data is expected as an array of data series. Please note that data series of different lengths is not currently supported.
+
+## Data series
+
+Data is expected as an array of data series objects. Please note that each data series must have the same length, as different lengths is not currently supported.
 
 ```sh
 # Data structure
@@ -58,6 +63,8 @@ data = [
 ...and so on...
 ]
 ```
+
+## Custom X values
 By default x values are set to the index of the dataseries, meaning the X-axis will go from 0 -> N where N is the data series length. You can provide custom X values if the standard x values aren't desired:
 
 ```sh
@@ -66,7 +73,7 @@ let customXValues = ['A', 'B', 'C', 'D', 'E', 'F']
 
 <Barline
 	data={data}
-    xValues={customXValues}
+	xValues={customXValues}
 	type="line"
 	height={400}
 	width={600}
@@ -76,5 +83,28 @@ let customXValues = ['A', 'B', 'C', 'D', 'E', 'F']
 />
 ```
 
+## Options
+Final Barline has a wide array of customization options to alter the chart to your liking.
 
-_Image credit: Square Enix_
+- `responsive` - Turn responsiveness of the chart on or off. Default: `TRUE`
+- `title` - Title of the chart. Placed top center if provided. Default: NONE
+- `width` - Provide a custom width for the chart. Note that this requires `responsive` to be `FALSE`
+- `height` - Provide a custom height for the chart. Default: `220`
+- `xValueSuffix` - Text placed after each X tick label (also shown in tooltip when hovering the graph)
+- `yValueSuffix` - Text placed after each Y tick label (also shown in tooltip header when hovering the graph)
+- `lineWidth` - Width of each data serie's graph line. Only applicable when `type = line` (line graph)
+- `paddingSides` - Provide your own padding to each side of the chart. Options are:
+- `paddingSides.left` - Padding to the left of the chart
+- `paddingSides.right` - Padding to the right of the chart
+- `paddingSides.top` - Padding to the top of the chart
+- `paddingSides.bottom` - Padding to the bottom of the chart
+- `xValueCulling` - By default all x values are shown. Sometimes when there are alot of data points, the graph will get unreadable. Use xValueCulling to limit how many x values are shown
+- `yValueCulling` - Same as `xValueCulling`, but for the y values
+- `xMin, xMax, yMin, yMax` - By default Final Barline calculates the min/max for x and y. If you'd instead like to set these values yourself, use these
+- `showLegend` - Turn on/off the data series legend. Default: `TRUE`
+- `xValuePrecision, yValuePrecision` - Number precision formatting to apply to the x and y values
+- `showHorizontalGridLines` - Whether or not to display horizontal (Y axis and to the right) gridlines. Default: `TRUE`
+- `showVerticalGridLines` - Whether or not to display vertical gridlines (X axis and down). Default: `TRUE`
+- `yMaxValuePadding` - Apply padding to the max value of Y. Useful if some additional space is needed at the top. Not to be confused with `paddingSides.top` which alters where the chart starts. Default: `0`
+
+_Header image credit: Square Enix_
