@@ -81,6 +81,7 @@
 	} = $props();
 
 	let chartContainerWidth = $state(0);
+	let tooltipWidth = $state(0);
 	let showGraphGrid = $state(true);
 	let svgChartElement: SVGSVGElement;
 	// Start position of the X/Y axis, to the right of the Y axis
@@ -117,9 +118,8 @@
 	const xScale = (x: number) => {
 		// TODO: Add padding to computedXMax if need for padding on the right side
 		// NOTE: Added padding to the right side to ensure scale factor has enough room
-		const ratio = (x - computedXMin) / (computedXMax + 1 - computedXMin);
-		const res =
-			chartSafetyMarginX / 2 + paddingSides.left + paddingSides.right + ratio * chartWidth;
+		const ratio = (x - computedXMin) / (computedXMax - computedXMin);
+		const res = ratio * chartWidth;
 		// Clamp to the drawable area
 		return Math.max(paddingSides.left + paddingSides.right, Math.min(chartWidth, res));
 	};
@@ -162,7 +162,15 @@
 	 */
 	let mouseHoverX = $derived(dataHoverIndex >= 0 ? xScale(dataHoverIndex) : 0);
 
-	let tooltipX = $derived(mouseHoverX + 10);
+	let tooltipX = $derived.by(() => {
+		// Determine when the mouse is hovering so far to the right that there's not enough space to show the tooltip and its width
+		if (mouseHoverX > chartWidth - tooltipWidth - 10) {
+			return mouseHoverX - tooltipWidth;
+		} else {
+			// Mouse is hovering to the left half of the chart, tooltip is shown to the right of the mouse cursor
+			return mouseHoverX + 5;
+		}
+	});
 	let tooltipY = $state(0);
 
 	let isHoveringChart = $state(false);
@@ -207,8 +215,8 @@
 		// Convert from the dimensions of the image to a corresponding data index in the chart
 		const relative = mouseX / chartWidth;
 		const index = Math.round(computedXMin + relative * (computedXMax - computedXMin));
-		tooltipY = event.clientY - rect.top + 10; // 10px below the mouse
-		dataHoverIndex = Math.max(0, Math.min(pointCount - 1, index));
+		tooltipY = event.clientY - rect.top; // 10px below the mouse
+		dataHoverIndex = Math.max(0, Math.min(pointCount, index));
 		isHoveringChart = true;
 	};
 
@@ -225,14 +233,14 @@
 			return [];
 		}
 
-		const barWidth = innerWidth / pointCount;
+		const barWidth = innerWidth / pointCount / 2;
 
 		const groups = Array.from({ length: pointCount }, (_, dataSeriesIndex) => {
 			const xBaseLine = xScale(dataSeriesIndex);
 			return data.map((series, seriesIndex) => {
 				const v = series.values[dataSeriesIndex];
 				const x = xBaseLine + seriesIndex * barWidth - barWidth / 2;
-				const y = Math.abs(yScale(v));
+				const y = yScale(v);
 				const h = innerHeight + (paddingSides.top + paddingSides.bottom) - y;
 				return {
 					x,
@@ -249,10 +257,13 @@
 	 * Creates values for X, taking into account any x culling settings
 	 */
 	const xTicks = $derived.by(() => {
-		const range = computedXMax - computedXMin;
-		const step = Math.max(1, Math.floor(range / xValueCulling));
+		// Ensure the culling value isn't larger than max number of data points
+		const xCulling = Math.min(xValueCulling, pointCount - 1);
 
-		const indexes = Array.from({ length: xValueCulling + 1 }, (_, i) => computedXMin + i * step);
+		const range = computedXMax - computedXMin;
+		const step = Math.max(1, Math.floor(range / xCulling));
+
+		const indexes = Array.from({ length: xCulling + 1 }, (_, i) => computedXMin + i * step);
 
 		// Use a set to ensure unique values
 		const unique = Array.from(new Set(indexes));
@@ -260,12 +271,20 @@
 		return unique.map((index) => {
 			// TODO: Using base index as fallback will cause issues when adding a xValuePadding and using custom xValues
 			const value = xValues?.[index] !== undefined ? xValues[index] : index;
+			let position = xScale(index);
+			let labelPosition = position;
+			if (index === 0) {
+				labelPosition = position + 10;
+			} else if (index === pointCount - 1) {
+				labelPosition = position - 10;
+			}
 			return {
 				value:
 					timeFormatting && value === 0
 						? 'Now'
 						: `${value.toFixed(xValuePrecision)}${xValueSuffix}`,
-				position: xScale(index)
+				position: position,
+				labelPosition: labelPosition
 			};
 		});
 	});
@@ -391,7 +410,7 @@
 		{#if isEnoughDataForPresentation}
 			<!-- Axis labels and grid lines -->
 			<!-- X-axis -->
-			{#each xTicks as { value, position }, index (`x-axis-label-${index}`)}
+			{#each xTicks as { value, position, labelPosition }, index (`x-axis-label-${index}`)}
 				{#if showGraphGrid}
 					<!-- LINES - Vertical -->
 					<line
@@ -405,7 +424,7 @@
 				{/if}
 				<!-- LABELS - X axis -->
 				<text
-					x={position}
+					x={labelPosition}
 					y={innerHeight + verticalPadding + 15}
 					text-anchor="middle"
 					font-size="12"
@@ -421,8 +440,8 @@
 				{#if showGraphGrid}
 					<!-- LINES - Horizontal -->
 					<line
-						x1={showHorizontalGridLines ? chartSafetyMarginX / 2 + 20 : verticalPadding}
-						x2={showHorizontalGridLines ? chartWidth + chartSafetyMarginX : horizontalPadding - 5}
+						x1={showHorizontalGridLines ? chartSafetyMarginX / 2 : verticalPadding}
+						x2={showHorizontalGridLines ? chartWidth : horizontalPadding - 5}
 						y1={y}
 						y2={y}
 						stroke="#ccc"
@@ -504,8 +523,8 @@
 			<line
 				x1={0}
 				x2={chartContainerWidth}
-				y1={tooltipY - 10}
-				y2={tooltipY - 10}
+				y1={tooltipY + 1}
+				y2={tooltipY + 1}
 				stroke="#2B9C6A"
 				stroke-width="1"
 				stroke-dasharray="4 4"
@@ -527,6 +546,7 @@
 	<!-- Tooltip for the graph -->
 	{#if isHoveringChart && dataHoverIndex >= 0}
 		<div
+			bind:clientWidth={tooltipWidth}
 			class="barline-tooltip"
 			style="
       left: {tooltipX}px;
@@ -557,14 +577,14 @@
 			</div>
 		</div>
 	{/if}
-	<div class="d-flex justify-content-center">
+	<div class="export-button-container">
 		<button
 			class="barline-export-chart-button"
 			onclick={() => {
 				exportSvg(svgChartElement);
 			}}
 		>
-			Export graph
+			🖼️ Export
 		</button>
 	</div>
 </div>
@@ -572,22 +592,7 @@
 <style>
 	.barline-chart {
 		font-family: 'Open Sans', 'Lato', 'Helvetica', 'Ubuntu', sans-serif;
-	}
-
-	.barline-export-chart-button {
-		background-color: #222;
-		color: #fff;
-		border: none;
-		padding: 8px 16px;
-		border-radius: 4px;
-		font-size: 14px;
-		cursor: pointer;
-	}
-
-	.barline-export-chart-button:hover {
-		background-color: #3f3f3f;
-		color: #ffac11;
-		transition: all 0.25s ease-in-out;
+		position: relative;
 	}
 
 	.barline-tooltip {
@@ -598,10 +603,6 @@
 		box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.4);
 		border-radius: 4px;
 		z-index: 500;
-	}
-
-	.barline-chart-title {
-		font-weight: bold;
 	}
 
 	.barline-tooltip-header {
@@ -620,5 +621,25 @@
 
 	.barline-tooltip-content dd {
 		margin: 0;
+	}
+
+	.barline-export-chart-button {
+		background-color: #222;
+		color: #fff;
+		border: none;
+		padding: 8px 16px;
+		border-radius: 4px;
+		font-size: 14px;
+		cursor: pointer;
+	}
+
+	.barline-export-chart-button:hover {
+		background-color: #3f3f3f;
+		color: #ffac11;
+		transition: all 0.25s ease-in-out;
+	}
+
+	.barline-chart-title {
+		font-weight: bold;
 	}
 </style>

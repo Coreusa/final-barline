@@ -1,6 +1,6 @@
 {
 	"name": "@coreusa/final-barline",
-	"version": "0.1.0",
+	"version": "0.1.5",
 	"description": "Final Barline - The lightweight, high performance SVG Chart Library",
 	"keywords": [
 		"SVG Chart",
