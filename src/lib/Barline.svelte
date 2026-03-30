@@ -3,573 +3,511 @@
   Charts can be customized through various properties like padding, line width and much more.
 -->
 <script lang="ts">
+	import type { BarlinePropsInterface } from './types/BarlinePropsInterface.ts';
 	import type { DataSeriesInterface } from './types/DataSeriesInterface.ts';
 
-	let {
-		data = [
-			{
-				label: '',
-				values: [0]
-			}
-		],
-		title = '',
-		type = 'line',
-		width = 400,
-		height = 200,
-		xMin = undefined,
-		xMax = undefined,
-		yMin = undefined,
-		yMax = undefined,
+	interface TooltipEntry {
+		seriesLabel: string;
+		dataValue: number;
+		color: string;
+	}
+
+	interface TooltipState {
+		pointerX: number;
+		pointerY: number;
+		xAxisValue: number;
+		entries: TooltipEntry[];
+	}
+
+	const {
+		data,
+		type,
+		title,
+		width = 600,
+		height = 400,
+		xMin,
+		xMax,
+		yMin,
+		yMax,
 		yMaxValuePadding = 0,
 		timeFormatting = false,
-		showLegend = true,
-		lineWidth = 3,
+		showZeroLine = false,
+		showTitle = true,
+		showLegend = false,
+		lineWidth = 2,
 		palette = ['#4BEF8F', '#d62728', '#FFC83B', '#17becf', '#dbdb8d', '#D4484B', '#9edae5'],
 		xValueSuffix = '',
 		yValueSuffix = '',
-		xValueCulling = 10,
-		xValuePrecision = 1,
-		yValuePrecision = 1,
-		xValues = [],
+		xValueCulling,
+		yValueCulling,
+		xValuePrecision = 2,
+		yValuePrecision = 2,
+		xValues,
 		paddingSides = {
 			top: 20,
-			bottom: 0,
-			right: 10,
-			left: 20
+			bottom: 20,
+			left: 45,
+			right: 20
 		},
 		showHorizontalGridLines = true,
-		showVerticalGridLines = true,
-		yValueCulling = 6,
+		showVerticalGridLines = false,
 		responsive = true
-	}: {
-		data: DataSeriesInterface[];
-		type: 'line' | 'bar';
-		title?: string;
-		width?: number;
-		height?: number;
-		xMin?: number;
-		xMax?: number;
-		yMin?: number;
-		yMax?: number;
-		yMaxValuePadding?: number; // How much extra space to add on top of the computed max y value
-		timeFormatting?: boolean;
-		showLegend?: boolean;
-		lineWidth?: number;
-		palette?: string[];
-		xValueSuffix?: string;
-		yValueSuffix?: string;
-		// Number of x axis values to display (max)
-		xValueCulling?: number;
-		// Number of y axis values to display (max)
-		yValueCulling?: number;
-		// Number precision for x values
-		xValuePrecision?: number;
-		// Number precision for y values
-		yValuePrecision?: number;
-		// Optionally provide the x values corresponding to each data point, otherwise assume that x values are 0, 1, 2, etc.)
-		xValues?: number[];
-		paddingSides?: {
-			top: number;
-			bottom: number;
-			left: number;
-			right: number;
-		};
-		showHorizontalGridLines?: boolean;
-		showVerticalGridLines?: boolean;
-		// Whether the chart resizes to parent container responsively or not (default true)
-		responsive?: boolean;
-	} = $props();
+	}: BarlinePropsInterface = $props();
 
+	const clipPathId = `barline-${Math.random().toString(36).slice(2, 9)}`;
+
+	let containerElement: HTMLDivElement | undefined = $state(undefined);
 	let chartContainerWidth = $state(0);
-	let tooltipWidth = $state(0);
-	let showGraphGrid = $state(true);
-	let svgChartElement: SVGSVGElement;
-	// Start position of the X/Y axis, to the right of the Y axis
-	const chartSafetyMarginX = 50;
-	const chartSafetyMarginBottom = 20;
+	let measuredHeight = $derived(height);
+	let svgChartElement: SVGSVGElement | undefined = $state(undefined);
 
-	let chartWidth = $derived.by(() => {
-		if (responsive) {
-			return chartContainerWidth;
-		} else {
-			return width;
-		}
-	});
+	let chartWidth = $derived(responsive ? chartContainerWidth : width);
+	let chartHeight = $derived(responsive ? measuredHeight : height);
 
-	// The inner width of the chart (where X starts (min, to the left) and ends (max, to the right)
-	let innerWidth = $derived.by(() => {
-		return chartWidth - (paddingSides.left + paddingSides.right + chartSafetyMarginX);
-	});
+	let padding = $derived(paddingSides);
+	let titleHeight = $derived(title ? 30 : 0);
+	let legendHeight = $derived(showLegend && data.length ? 28 : 0);
 
-	// The inner height of the chart (where Y starts (min, bottom) and ends (max, top). Additionally adds a safety margin at the bottom so x values can be shown
-	const innerHeight = $derived.by(
-		() => height - (paddingSides.top + paddingSides.bottom) - chartSafetyMarginBottom
+	let chartLeft = $derived(padding.left);
+	let chartTop = $derived(padding.top + titleHeight);
+	let chartInnerWidth = $derived(Math.max(1, chartWidth - padding.left - padding.right));
+	let chartInnerHeight = $derived(
+		Math.max(1, chartHeight - padding.top - padding.bottom - titleHeight - legendHeight)
 	);
 
-	let isEnoughDataForPresentation = $derived.by(() => {
-		// Ensure there is at least one data series and that series has at least 1 data point
-		return data?.length > 0 && data[0]?.values?.length > 1;
-	});
+	// Data ranges
+	let maxSeriesLength = $derived(
+		data.length ? Math.max(...data.map((series) => series.values.length)) : 0
+	);
 
-	/**
-	 * Scales an x value based on the width of the chart and the min/max x values observed in the data set
-	 * @param x
-	 */
-	const xScale = (x: number) => {
-		// TODO: Add padding to computedXMax if need for padding on the right side
-		// NOTE: Added padding to the right side to ensure scale factor has enough room
-		const ratio = (x - computedXMin) / (computedXMax - computedXMin);
-		const res = ratio * chartWidth;
-		// Clamp to the drawable area
-		return Math.max(paddingSides.left + paddingSides.right, Math.min(chartWidth, res));
-	};
+	let xAxisValues = $derived(
+		xValues?.length ? xValues : Array.from({ length: maxSeriesLength }, (_, index) => index)
+	);
 
-	const yScale = (y: number) => {
-		const ratio = (y - computedYMin) / (computedYMax - computedYMin);
-		const res = innerHeight + (paddingSides.top + paddingSides.bottom) - ratio * innerHeight;
-		return isNaN(res) ? 0 : res;
-	};
+	let allYValues = $derived(data.flatMap((series) => series.values).filter(Number.isFinite));
 
-	// All numeric values across every series – used for autoscaling y‑axis
-	const allValues = $derived.by(() => {
-		if (data?.length && data[0].values?.length > 2) {
-			return data.flatMap((d) => {
-				return d.values;
-			});
-		} else {
-			return [0];
-		}
-	});
+	let yRangeMin = $derived(
+		yMin !== undefined ? yMin : allYValues.length ? Math.min(...allYValues) : 0
+	);
 
-	// X‑axis is based on the number of points (assumes all series share the same length)
-	const pointCount = $derived.by(() => {
-		// Test if there are x values present (custom x ticks provided)
-		if (xValues?.length > 0) {
-			return xValues.length;
-		} else if (data?.length && data[0]?.values?.length > 0) {
-			// Sample only the first data series. Point count must be the same across all data series
-			return data[0]?.values?.length;
-		} else {
-			return 0;
-		}
-	});
+	let yRangeMax = $derived(
+		(yMax !== undefined ? yMax : allYValues.length ? Math.max(...allYValues) : 1) + yMaxValuePadding
+	);
 
-	// What data index is currently under the mouse cursor
-	let dataHoverIndex = $state(-1);
+	let xRangeMin = $derived(
+		xMin !== undefined ? xMin : xAxisValues.length ? Math.min(...xAxisValues) : 0
+	);
+	let xRangeMax = $derived(
+		xMax !== undefined
+			? xMax
+			: xAxisValues.length
+				? Math.max(...xAxisValues)
+				: Math.max(maxSeriesLength - 1, 1)
+	);
 
-	/**
-	 * Variables related to tooltip position and mouse hovering the chart
-	 */
-	let mouseHoverX = $derived(dataHoverIndex >= 0 ? xScale(dataHoverIndex) : 0);
+	// Scale functions. Maps data values to SVG pixel coordinates
+	function scaleX(dataX: number): number {
+		const range = xRangeMax - xRangeMin;
+		return chartLeft + (range === 0 ? 0.5 : (dataX - xRangeMin) / range) * chartInnerWidth;
+	}
 
-	let tooltipX = $derived.by(() => {
-		// Determine when the mouse is hovering so far to the right that there's not enough space to show the tooltip and its width
-		if (mouseHoverX > chartWidth - tooltipWidth - 10) {
-			return mouseHoverX - tooltipWidth;
-		} else {
-			// Mouse is hovering to the left half of the chart, tooltip is shown to the right of the mouse cursor
-			return mouseHoverX + 5;
-		}
-	});
-	let tooltipY = $state(0);
-
-	let isHoveringChart = $state(false);
-
-	// Handle all values if they are undefined
-	const computedXMin = $derived(xMin ?? 0);
-	const computedXMax = $derived(xMax ?? pointCount - 1);
-	const computedYMin = $derived(yMin ?? Math.min(...allValues));
-	const computedYMax = $derived(yMax ?? Math.max(...allValues) + yMaxValuePadding);
-
-	/* 
-  /**
-   * Returns an array of SVG path strings, one per series
-   */
-	const graphLines = $derived.by(() => {
-		// Iterate each data series and create paths
-		const paths = data.map((series) => {
-			const points = series.values;
-			if (points?.length < 2) {
-				// Empty line if there's not enough data
-				return 'M 0 0';
-			}
-			// Create a line for each data series and concatinate to a SVG path string
-			return points
-				.map((value, index) => {
-					const x = xScale(index);
-					const y = yScale(value);
-					return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
-				})
-				.join(' ');
-		});
-		return paths;
-	});
-
-	/**
-	 * Mouse handler for when the user hovers the chart (to show tooltip and vertical index/position line)
-	 * @param event
-	 */
-	const onMouseMove = (event: MouseEvent) => {
-		const rect = (event.currentTarget as SVGRectElement).getBoundingClientRect();
-		const mouseX = event.clientX - rect.left - chartSafetyMarginX + paddingSides.left;
-		// Convert from the dimensions of the image to a corresponding data index in the chart
-		const relative = mouseX / chartWidth;
-		const index = Math.round(computedXMin + relative * (computedXMax - computedXMin));
-		tooltipY = event.clientY - rect.top; // 10px below the mouse
-		dataHoverIndex = Math.max(0, Math.min(pointCount, index));
-		isHoveringChart = true;
-	};
-
-	const onMouseLeave = () => {
-		isHoveringChart = false;
-		dataHoverIndex = -1;
-	};
-
-	/**
-	 * Bar chart groups. Do not calculate them if the chart type is not bar
-	 */
-	const graphBars = $derived.by(() => {
-		if (type !== 'bar' || !isEnoughDataForPresentation) {
-			return [];
-		}
-
-		const barWidth = innerWidth / pointCount / 2;
-
-		const groups = Array.from({ length: pointCount }, (_, dataSeriesIndex) => {
-			const xBaseLine = xScale(dataSeriesIndex);
-			return data.map((series, seriesIndex) => {
-				const v = series.values[dataSeriesIndex];
-				const x = xBaseLine + seriesIndex * barWidth - barWidth / 2;
-				const y = yScale(v);
-				const h = innerHeight + (paddingSides.top + paddingSides.bottom) - y;
-				return {
-					x,
-					y,
-					w: barWidth,
-					h
-				};
-			});
-		});
-		return groups;
-	});
-
-	/**
-	 * Creates values for X, taking into account any x culling settings
-	 */
-	const xTicks = $derived.by(() => {
-		// Ensure the culling value isn't larger than max number of data points
-		const xCulling = Math.min(xValueCulling, pointCount - 1);
-
-		const range = computedXMax - computedXMin;
-		const step = Math.max(1, Math.floor(range / xCulling));
-
-		const indexes = Array.from({ length: xCulling + 1 }, (_, i) => computedXMin + i * step);
-
-		// Use a set to ensure unique values
-		const unique = Array.from(new Set(indexes));
-
-		return unique.map((index) => {
-			// TODO: Using base index as fallback will cause issues when adding a xValuePadding and using custom xValues
-			const value = xValues?.[index] !== undefined ? xValues[index] : index;
-			let position = xScale(index);
-			let labelPosition = position;
-			if (index === 0) {
-				labelPosition = position + 10;
-			} else if (index === pointCount - 1) {
-				labelPosition = position - 10;
-			}
-			return {
-				value:
-					timeFormatting && value === 0
-						? 'Now'
-						: `${value.toFixed(xValuePrecision)}${xValueSuffix}`,
-				position: position,
-				labelPosition: labelPosition
-			};
-		});
-	});
-
-	/**
-	 * Creates values for Y, taking into account any y culling settings
-	 */
-	const yTicks = $derived.by(() => {
-		return Array.from({ length: yValueCulling }, (_, i) => {
-			const value = computedYMin + (i / (yValueCulling - 1)) * (computedYMax - computedYMin);
-			return {
-				value,
-				y: yScale(value)
-			};
-		});
-	});
-
-	/**
-	 * Map legend data series labels and corresponding color in the palette
-	 */
-	const legend = $derived.by(() => {
-		return data.map((series, index) => {
-			return {
-				label: series.label,
-				color: palette[index % palette.length]
-			};
-		});
-	});
-
-	const legendWidth = $derived.by(() => {
-		if (legend.length > 0) {
-			// Determine how long each legend can be based on the number of data series and the chart width (minus padding on each side)
-			return Math.min(
-				100,
-				(innerWidth - 2 * paddingSides.left + paddingSides.right) / legend.length
-			);
-		} else {
-			return 0;
-		}
-	});
-
-	/**
-	 * Determine where to start placing the legend (far end of chart)
-	 */
-	const legendStartX = $derived.by(() => {
-		if (legend.length > 0) {
-			// Center the legend in the remaining space after taking into account the legend width and padding on each side
-			return paddingSides.left + paddingSides.right + (innerWidth - legendWidth * legend.length);
-		} else {
-			return 0;
-		}
-	});
-
-	let chartFilename = $derived.by(() => {
-		const timeNow = Date.now();
-		let fileNamePrefix = 'chart-export-';
-		if (title?.length) {
-			fileNamePrefix = title.toLowerCase().replace(/\s+/g, '-');
-		}
-		return `${fileNamePrefix}-${timeNow}.svg`;
-	});
-
-	const exportSvg = (svgElement: SVGSVGElement) => {
-		const clone = svgElement.cloneNode(true) as SVGSVGElement;
-		const serializer = new XMLSerializer();
-
-		/**
-		 * TODO: Consider adding a toggle whether or not to default coloring of exported
-		 * chart to avoid removing custom user profiling / styles
-		 */
-		const darkColour = '#222';
-		// Change all text to dark so the chart can be read properly
-		clone.querySelectorAll('text').forEach((txt) => {
-			// If the element already has a fill, overwrite it; otherwise just set it
-			txt.setAttribute('fill', darkColour);
-			txt.setAttribute('font-family', 'Open Sans');
-			// Some charts use stroke for text – set that as well just in case
-			txt.setAttribute('stroke', darkColour);
-		});
-
-		const svgString = serializer.serializeToString(clone);
-		// Add XML declaration + optional DOCTYPE for better compatibility
-		const svgBlob = new Blob(
-			[
-				'<?xml version="1.0" encoding="UTF-8"?>\n',
-				'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"\n',
-				'  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n',
-				svgString
-			],
-			{ type: 'image/svg+xml;charset=utf-8' }
+	function scaleY(dataY: number): number {
+		const range = yRangeMax - yRangeMin;
+		return (
+			chartTop +
+			chartInnerHeight -
+			(range === 0 ? 0.5 : (dataY - yRangeMin) / range) * chartInnerHeight
 		);
+	}
 
-		const url = URL.createObjectURL(svgBlob);
-		const link = document.createElement('a');
-		link.href = url;
-		link.download = chartFilename;
-		link.click();
-		URL.revokeObjectURL(url);
+	// Tick values
+	let yTickCount = $derived(Math.max(1, yValueCulling ?? 5));
+	let yTickValues = $derived(
+		Array.from(
+			{ length: yTickCount + 1 },
+			(_, i) => yRangeMin + (yRangeMax - yRangeMin) * (i / yTickCount)
+		)
+	);
+
+	let xTickValues = $derived.by<number[]>(() => {
+		if (!xAxisValues.length) return [];
+		const maxTicks = Math.max(1, xValueCulling ?? xAxisValues.length);
+		if (xAxisValues.length <= maxTicks) return [...xAxisValues];
+		return Array.from(
+			{ length: maxTicks },
+			(_, i) => xAxisValues[Math.round((i * (xAxisValues.length - 1)) / (maxTicks - 1))]
+		);
+	});
+
+	let slotWidth = $derived(
+		xAxisValues.length ? chartInnerWidth / xAxisValues.length : chartInnerWidth
+	);
+
+	let groupWidth = $derived(slotWidth * 0.8);
+	let barWidth = $derived(data.length ? groupWidth / data.length : groupWidth);
+
+	function barSlotCenterX(valueIndex: number): number {
+		const slotPx = chartInnerWidth / Math.max(xAxisValues.length, 1);
+		return chartLeft + slotPx * valueIndex + slotPx / 2;
+	}
+
+	function barLeftEdgeX(valueIndex: number, seriesIndex: number): number {
+		return barSlotCenterX(valueIndex) - groupWidth / 2 + seriesIndex * barWidth;
+	}
+
+	function barTopEdgeY(value: number): number {
+		return Math.min(scaleY(Math.max(yRangeMin, 0)), scaleY(value));
+	}
+
+	function barRectHeight(value: number): number {
+		return Math.max(1, Math.abs(scaleY(Math.max(yRangeMin, 0)) - scaleY(value)));
+	}
+
+	// Position of x tick labels.
+	const xTickPixelPosition = (tickValue: number): number => {
+		if (type === 'bar') {
+			const index = xAxisValues.indexOf(tickValue);
+			return index >= 0 ? barSlotCenterX(index) : scaleX(tickValue);
+		} else {
+			return scaleX(tickValue);
+		}
 	};
-	const horizontalPadding = $derived.by(() => paddingSides.left + paddingSides.right);
-	const verticalPadding = $derived.by(() => paddingSides.top + paddingSides.bottom);
+
+	// Graph lines
+	const graphLines = (series: DataSeriesInterface): string => {
+		const points = series.values.map((value, index) => {
+			const pixelX = scaleX(xAxisValues[index] ?? index).toFixed(1);
+			const pixelY = scaleY(value).toFixed(1);
+			return `${pixelX}, ${pixelY}`;
+		});
+		return points.length ? `M ${points.join(' L ')}` : '';
+	};
+
+	function formatValue(
+		value: number,
+		precision: number,
+		suffix: string,
+		timeFormatting: boolean = false
+	): string {
+		if (value === 0 && timeFormatting) {
+			return 'Now';
+		} else {
+			return value.toFixed(precision) + suffix;
+		}
+	}
+
+	function formatXValue(value: number): string {
+		return formatValue(value, xValuePrecision, xValueSuffix, timeFormatting);
+	}
+
+	function formatYValue(value: number): string {
+		return formatValue(value, yValuePrecision, yValueSuffix);
+	}
+
+	// ─── Tooltip state ───────────────────────────────────────────────────────────
+
+	let tooltip = $state<TooltipState | null>(null);
+	let hoveredValueIndex = $state<number | null>(null);
+
+	function onMouseOverColumn(event: MouseEvent, valueIndex: number) {
+		const svgElement = (event.currentTarget as SVGElement).ownerSVGElement;
+		if (!svgElement) return;
+		const svgBounds = svgElement.getBoundingClientRect();
+		hoveredValueIndex = valueIndex;
+		tooltip = {
+			pointerX: event.clientX - svgBounds.left - 50,
+			pointerY: event.clientY - svgBounds.top,
+			xAxisValue: xAxisValues[valueIndex] ?? valueIndex,
+			entries: data
+				.filter((series) => series.values[valueIndex] !== undefined)
+				.map((series, seriesIndex) => ({
+					seriesLabel: series.label,
+					dataValue: series.values[valueIndex],
+					color: palette[seriesIndex % palette.length]
+				}))
+		};
+	}
+
+	// function handleColumnMouseMove(event: MouseEvent) {
+	// 	if (!tooltip) return;
+	// 	const svgElement = (event.currentTarget as SVGElement).ownerSVGElement;
+	// 	if (!svgElement) return;
+	// 	const svgBounds = svgElement.getBoundingClientRect();
+	// 	tooltip = {
+	// 		...tooltip,
+	// 		pointerX: event.clientX - svgBounds.left,
+	// 		pointerY: event.clientY - svgBounds.top
+	// 	};
+	// }
+
+	function handleMouseLeave() {
+		tooltip = null;
+		hoveredValueIndex = null;
+	}
+
+	let zeroLine = $derived(yRangeMin <= 0 ? scaleY(0) : null);
+
+	let legendItems = $derived(
+		data.map((series, index) => ({
+			label: series.label,
+			color: palette[index % palette.length]
+		}))
+	);
+
+	// ─── Hover hit zones ─────────────────────────────────────────────────────────
+	// One invisible full-height strip per x-index. Each strip spans from the
+	// midpoint to the previous data point to the midpoint to the next, giving
+	// seamless coverage of the entire chart area with no gaps or overlaps.
+	let hitZones = $derived.by(() =>
+		xAxisValues.map((_, index) => {
+			const currentPixelX = type === 'bar' ? barSlotCenterX(index) : scaleX(xAxisValues[index]);
+			const previousPixelX =
+				index > 0
+					? type === 'bar'
+						? barSlotCenterX(index - 1)
+						: scaleX(xAxisValues[index - 1])
+					: null;
+			const nextPixelX =
+				index < xAxisValues.length - 1
+					? type === 'bar'
+						? barSlotCenterX(index + 1)
+						: scaleX(xAxisValues[index + 1])
+					: null;
+			const leftEdge = previousPixelX !== null ? (previousPixelX + currentPixelX) / 2 : chartLeft;
+			const rightEdge =
+				nextPixelX !== null ? (currentPixelX + nextPixelX) / 2 : chartLeft + chartWidth;
+			return { leftEdge, width: rightEdge - leftEdge, index };
+		})
+	);
 </script>
 
-<div bind:clientWidth={chartContainerWidth} class="barline-chart">
+<div
+	bind:this={containerElement}
+	bind:clientWidth={chartContainerWidth}
+	class="chart-wrap"
+	class:barline-w-100={responsive}
+	class:barline-h-100={responsive}
+	style:width={responsive ? '' : `${width}px`}
+	style:height={responsive ? '' : `${height}px`}
+>
 	<svg
 		bind:this={svgChartElement}
 		width={chartWidth}
-		{height}
-		viewBox={`0 0 ${chartWidth} ${height}`}
+		height={chartHeight}
+		id={clipPathId}
+		viewBox="0 0 {chartWidth} {chartHeight}"
 		xmlns="http://www.w3.org/2000/svg"
+		class="barline-chart-svg"
+		role="img"
+		aria-label={title ?? 'Chart'}
 	>
-		<!-- Title -->
-		<text
-			x={chartWidth / 2}
-			y={paddingSides.top / 2}
-			text-anchor="middle"
-			font-size="14"
-			class="barline-chart-title fw-bold"
-			fill="#222">{title}</text
-		>
+		<defs>
+			<clipPath>
+				<rect x={chartLeft} y={chartTop} width={chartInnerWidth} height={chartInnerHeight} />
+			</clipPath>
+		</defs>
 
-		<!-- Only plot graph if there is at least 1 data series with 1 data point -->
-		{#if isEnoughDataForPresentation}
-			<!-- Axis labels and grid lines -->
-			<!-- X-axis -->
-			{#each xTicks as { value, position, labelPosition }, index (`x-axis-label-${index}`)}
-				{#if showGraphGrid}
-					<!-- LINES - Vertical -->
-					<line
-						x1={position}
-						x2={position}
-						y1={showVerticalGridLines ? verticalPadding : height - verticalPadding + 5}
-						y2={height - paddingSides.bottom - chartSafetyMarginBottom}
-						stroke="#e0e0e0"
-						stroke-width="1"
-					/>
-				{/if}
-				<!-- LABELS - X axis -->
-				<text
-					x={labelPosition}
-					y={innerHeight + verticalPadding + 15}
-					text-anchor="middle"
-					font-size="12"
-					transform={`rotate(0, ${position + 5}, ${height})`}
-					fill="#222"
-				>
-					{value}
-				</text>
-			{/each}
+		<!-- Chart title -->
+		{#if showTitle}
+			<text
+				x={chartWidth / 2}
+				y={padding.top + titleHeight / 2}
+				text-anchor="middle"
+				dominant-baseline="central"
+				class="chart-title">{title}</text
+			>
+		{/if}
 
-			<!-- Y‑axis -->
-			{#each yTicks as { value, y }, index (`y-axis-label-${index}`)}
-				{#if showGraphGrid}
-					<!-- LINES - Horizontal -->
-					<line
-						x1={showHorizontalGridLines ? chartSafetyMarginX / 2 : verticalPadding}
-						x2={showHorizontalGridLines ? chartWidth : horizontalPadding - 5}
-						y1={y}
-						y2={y}
-						stroke="#ccc"
-						stroke-width="1"
-					/>
-				{/if}
-				<!-- LABELS - Y axis. NOTE: Add margin for last (top Y value) in case no top padding is in place -->
-				<text
-					x={chartSafetyMarginX - 10}
-					y={index === yTicks.length - 1 ? y + 10 : y + 5}
-					text-anchor="end"
-					font-size="12"
-					font-family="open sans"
-					fill="#222"
-				>
-					{value.toFixed(1)}
-					{yValueSuffix}
-				</text>
-			{/each}
+		<!-- Y Axis -->
+		{#each yTickValues as tickValue, index (`y-value-${index}`)}
+			{@const pixelY = scaleY(tickValue)}
+			{#if showHorizontalGridLines}
+				<line
+					x1={chartLeft}
+					y1={pixelY}
+					x2={chartLeft + chartInnerWidth}
+					y2={pixelY}
+					class="barline-grid-line"
+				/>
+			{/if}
+			<line x1={chartLeft - 4} y1={pixelY} x2={chartLeft} y2={pixelY} class="tick-line" />
+			<text
+				x={chartLeft - 8}
+				y={pixelY}
+				text-anchor="end"
+				dominant-baseline="central"
+				class="axis-label"
+			>
+				{formatYValue(tickValue)}
+			</text>
+		{/each}
 
+		<!-- X Axis -->
+		{#each xTickValues as tickValue, index (`x-value-${index}`)}
+			{@const pixelX = xTickPixelPosition(tickValue)}
+			{#if showVerticalGridLines}
+				<line
+					x1={pixelX}
+					y1={chartTop}
+					x2={pixelX}
+					y2={chartTop + chartInnerHeight}
+					class="barline-grid-line"
+				/>
+			{/if}
+			<line
+				x1={pixelX}
+				y1={chartTop + chartInnerHeight}
+				x2={pixelX}
+				y2={chartTop + chartInnerHeight + 5}
+				class="tick-line"
+			/>
+			<text x={pixelX} y={chartTop + chartInnerHeight + 18} text-anchor="middle" class="axis-label">
+				{formatXValue(tickValue)}
+			</text>
+		{/each}
+
+		<line
+			x1={chartLeft}
+			y1={chartTop}
+			x2={chartLeft}
+			y2={chartTop + chartInnerHeight}
+			class="axis-line"
+		/>
+		<line
+			x1={chartLeft}
+			y1={chartTop + chartInnerHeight}
+			x2={chartLeft + chartInnerWidth}
+			y2={chartTop + chartInnerHeight}
+			class="axis-line"
+		/>
+
+		{#if showZeroLine && zeroLine !== null}
+			<line
+				x1={chartLeft}
+				y1={zeroLine}
+				x2={chartLeft + chartInnerWidth}
+				y2={zeroLine}
+				class="barline-zero-line"
+			/>
+		{/if}
+		<g>
 			{#if type === 'line'}
-				{#each graphLines as path, lineIndex (`line-${lineIndex}`)}
+				{#each data as series, seriesIndex (`data-series-${seriesIndex}`)}}
+					{@const seriesColor = palette[seriesIndex % palette.length]}
+					<!-- Connecting line -->
 					<path
-						d={path}
+						d={graphLines(series)}
 						fill="none"
-						stroke={palette[lineIndex % palette.length]}
+						stroke={seriesColor}
 						stroke-width={lineWidth}
 						stroke-linejoin="round"
+						stroke-linecap="round"
 					/>
+					<!-- Hover points for each data series value -->
+					{#each series.values as _, valueIndex (`data-series-${valueIndex}`)}
+						{@const isHovered = hoveredValueIndex === valueIndex}
+						<circle
+							cx={scaleX(xAxisValues[valueIndex] ?? valueIndex)}
+							cy={scaleY(series.values[valueIndex])}
+							r={isHovered ? 8 : 2}
+							fill={seriesColor}
+							stroke="white"
+							stroke-width={isHovered ? 2 : 0}
+							class="barline-data-point"
+							class:barline-data-point-hovered={isHovered}
+						/>
+					{/each}
 				{/each}
-			{:else if type === 'bar'}
-				{#each graphBars as group, groupIndex (`bar-group-${groupIndex}`)}}
-					{#each group as { x, y, w, h }, barIndex (`bar-group-${barIndex}-bar-${barIndex}`)}
-						<rect {x} {y} width={w} height={h} fill={palette[barIndex % palette.length]} />
+			{:else}
+				{#each data as series, seriesIndex (`data-series-${seriesIndex}`)}
+					{@const seriesColor = palette[seriesIndex % palette.length]}
+					{#each series.values as value, valueIndex (`data-series-${valueIndex}`)}
+						<rect
+							x={barLeftEdgeX(valueIndex, seriesIndex)}
+							y={barTopEdgeY(value)}
+							width={barWidth}
+							height={barRectHeight(value)}
+							fill={seriesColor}
+							rx={2}
+							class="bar-rect"
+							role="button"
+							tabindex={seriesIndex}
+							onmouseleave={handleMouseLeave}
+						/>
 					{/each}
 				{/each}
 			{/if}
-		{:else}
-			<!-- Not enough data, show message -->
-			Please provide at least 1 data series with at least 1 data point in them.
-		{/if}
+			<!-- Chart tooltip on hover -->
+			{#if tooltip}
+				<!-- Vertical hover line -->
+				<line
+					x1={scaleX(tooltip.xAxisValue)}
+					y1={chartTop}
+					x2={scaleX(tooltip.xAxisValue)}
+					y2={chartTop + chartInnerHeight}
+					stroke="#ccc"
+					stroke-width={1}
+					stroke-dasharray="4 4"
+				/>
+			{/if}
+			<!-- ── Hit zones: one invisible full-height strip per x-index ──────── -->
+			{#each hitZones as zone, zoneIndex (`barline-hit-zone-${zoneIndex}`)}
+				<rect
+					x={zone.leftEdge}
+					y={chartTop}
+					width={zone.width}
+					height={chartHeight}
+					role="button"
+					tabindex="-1"
+					fill="transparent"
+					class="hit-zone"
+					onmouseenter={(event) => onMouseOverColumn(event, zone.index)}
+					onmouseleave={handleMouseLeave}
+				/>
+			{/each}
+		</g>
 
-		<!-- Add data series legend (if enabled) -->
-		{#if showLegend}
-			<!-- Background area behind legend for better eligibility -->
-			<rect
-				width={legendWidth * legend.length}
-				height="40"
-				x={legendStartX - (paddingSides.left + paddingSides.right) / 2}
-				y={paddingSides.top + 8}
-				fill="#222"
-				opacity="0.9"
-			/>
-			{#each legend as { label, color }, index (`data-series-legend-${index}`)}
-				<g transform={`translate(${legendStartX + legendWidth * index}, ${paddingSides.top + 20})`}>
-					<!-- Colored square matching the color of the corresponding data series -->
-					<rect width="14" height="14" fill={color} />
-					<!-- Name of the data series -->
-					<text x="20" y="13" font-size="16" class="fw-bold" fill="#fff">
-						{label}
-					</text>
-				</g>
+		<!-- Display legend -->
+		{#if showLegend && legendItems.length}
+			{@const legendBaseY = chartHeight - padding.bottom + 10}
+			{@const legendItemWidth = 50}
+			{@const itemsPerRow = Math.max(1, Math.floor(chartInnerWidth / legendItemWidth))}
+			{@const rowCount = Math.ceil(legendItems.length / itemsPerRow)}
+			{#each legendItems as item, itemIndex (`legend-item-${itemIndex}`)}
+				{@const columnIndex = itemIndex % itemsPerRow}
+				{@const rowIndex = Math.floor(itemIndex / itemsPerRow)}
+				{@const rowItemCount =
+					rowIndex < rowCount - 1 ? itemsPerRow : legendItems.length - rowIndex * itemsPerRow}
+				{@const legendItemX =
+					chartLeft +
+					(chartInnerWidth - rowItemCount * legendItemWidth) / 2 +
+					columnIndex * legendItemWidth}
+				{@const legendItemY = legendBaseY + rowIndex * 20}
+				<rect x={legendItemX} y={legendItemY - 6} width={15} height={15} rx={2} fill={item.color} />
+				<text x={legendItemX + 20} y={legendItemY} class="legend-label">
+					{item.label}
+				</text>
 			{/each}
 		{/if}
-
-		<!-- Vertical and horizontal line upon mouse hover -->
-		{#if mouseHoverX > 0}
-			<!-- Vertical hover line -->
-			<line
-				x1={mouseHoverX}
-				x2={mouseHoverX}
-				y1={verticalPadding}
-				y2={height - verticalPadding}
-				stroke="#2B9C6A"
-				stroke-width="1"
-				stroke-dasharray="4 4"
-			/>
-			<!-- Horizontal hover line -->
-			<line
-				x1={0}
-				x2={chartContainerWidth}
-				y1={tooltipY + 1}
-				y2={tooltipY + 1}
-				stroke="#2B9C6A"
-				stroke-width="1"
-				stroke-dasharray="4 4"
-			/>
-		{/if}
-
-		<!-- Transparent overlay to capture mouse events -->
-		<rect
-			x={0}
-			y={0}
-			width={chartContainerWidth}
-			{height}
-			fill="transparent"
-			role="presentation"
-			onmousemove={onMouseMove}
-			onmouseleave={onMouseLeave}
-		/>
 	</svg>
-	<!-- Tooltip for the graph -->
-	{#if isHoveringChart && dataHoverIndex >= 0}
+	{#if tooltip}
 		<div
-			bind:clientWidth={tooltipWidth}
 			class="barline-tooltip"
 			style="
-      left: {tooltipX}px;
-      top: {tooltipY}px;
+      left: {tooltip?.pointerX + 10}px;
+      top: {tooltip?.pointerY}px;
       pointer-events: none;
     "
 		>
-			<h6 class="barline-tooltip-header">
-				<!-- If custom X Values have been provided (and there's no x max), use the hover index and lookup the value in that array. Otherwise use the data series index -->
-				{xValues?.length > 0 && xMax === undefined
-					? xValues[dataHoverIndex].toFixed(xValuePrecision)
-					: dataHoverIndex.toFixed(xValuePrecision)}
-				{xValueSuffix}
-			</h6>
+			<h6 class="barline-tooltip-header">{formatXValue(tooltip?.xAxisValue)}</h6>
 			<div class="barline-tooltip-content">
-				<dd>
-					{#each data as dataSeries, seriesIndex (`data-series-tooltip-${seriesIndex}`)}
+				<dd class="barline-tooltip-data-series-list">
+					{#each tooltip.entries as dataSeries, seriesIndex (`data-series-tooltip-${seriesIndex}`)}
 						<dl>
 							<span style="color:{palette[seriesIndex % palette.length]}">&#9632; </span>
 							<strong>
-								{dataSeries.label}
-								{dataSeries.values[dataHoverIndex].toFixed(yValuePrecision)}
-								{yValueSuffix}
+								{dataSeries.seriesLabel}:
+								{formatYValue(dataSeries.dataValue)}
 							</strong>
 						</dl>
 					{/each}
@@ -577,22 +515,75 @@
 			</div>
 		</div>
 	{/if}
-	<div class="export-button-container">
-		<button
-			class="barline-export-chart-button"
-			onclick={() => {
-				exportSvg(svgChartElement);
-			}}
-		>
-			🖼️ Export
-		</button>
-	</div>
 </div>
 
-<style>
-	.barline-chart {
-		font-family: 'Open Sans', 'Lato', 'Helvetica', 'Ubuntu', sans-serif;
+<!-- ─── Styles ───────────────────────────────────────────────────────────── -->
+
+<style scoped>
+	.chart-wrap {
+		display: block;
+		box-sizing: border-box;
 		position: relative;
+	}
+
+	.barline-w-100 {
+		width: 100%;
+	}
+
+	.barline-h-100 {
+		height: 100%;
+	}
+
+	.chart-title {
+		font-size: 15px;
+		font-weight: 600;
+	}
+
+	.axis-label {
+		font-size: 12px;
+		fill: #222;
+	}
+
+	.legend-label {
+		font-size: 12px;
+	}
+
+	.axis-line {
+		stroke: #ccc;
+		stroke-width: 1.5;
+		fill: none;
+	}
+
+	.tick-line {
+		stroke: #ccc;
+		stroke-width: 1;
+		fill: none;
+	}
+
+	.barline-grid-line {
+		stroke: #ccc;
+		stroke-width: 1;
+		stroke-dasharray: 4 4;
+		fill: none;
+	}
+
+	.barline-zero-line {
+		stroke: yellow;
+		stroke-width: 1;
+		stroke-dasharray: 2 2;
+	}
+
+	.barline-data-point {
+		pointer-events: none;
+	}
+
+	.bar-rect {
+		opacity: 0.95;
+		pointer-events: none;
+	}
+
+	.hit-zone {
+		outline: none;
 	}
 
 	.barline-tooltip {
@@ -606,7 +597,6 @@
 	}
 
 	.barline-tooltip-header {
-		/*bg-dark-blue-horizontal-gradient text-white p-2*/
 		background-color: #222;
 		color: #fff;
 		font-size: 1.1rem;
@@ -623,23 +613,19 @@
 		margin: 0;
 	}
 
-	.barline-export-chart-button {
-		background-color: #222;
-		color: #fff;
-		border: none;
-		padding: 8px 16px;
-		border-radius: 4px;
-		font-size: 14px;
-		cursor: pointer;
+	.barline-tooltip-data-series-list,
+	.barline-tooltip-data-series-list dl {
+		margin: 0;
+		padding: 0;
 	}
 
-	.barline-export-chart-button:hover {
-		background-color: #3f3f3f;
-		color: #ffac11;
-		transition: all 0.25s ease-in-out;
+	.barline-data-point {
+		pointer-events: none;
+		transition:
+			r 0.1s ease,
+			stroke-width 0.5s ease;
 	}
-
-	.barline-chart-title {
-		font-weight: bold;
+	.barline-data-point-hovered {
+		box-shadow: 10px 10px 5px rgba(255, 255, 255, 0.8);
 	}
 </style>
