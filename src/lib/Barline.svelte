@@ -6,17 +6,15 @@
 	import type { BarlinePropsInterface } from './types/BarlinePropsInterface.ts';
 	import type { DataSeriesInterface } from './types/DataSeriesInterface.ts';
 
-	interface TooltipEntry {
-		seriesLabel: string;
-		dataValue: number;
-		color: string;
-	}
-
 	interface TooltipState {
 		pointerX: number;
 		pointerY: number;
 		xAxisValue: number;
-		entries: TooltipEntry[];
+		entries: Array<{
+			seriesLabel: string;
+			dataValue: number;
+			color: string;
+		}>;
 	}
 
 	const {
@@ -35,7 +33,16 @@
 		showTitle = true,
 		showLegend = false,
 		lineWidth = 2,
-		palette = ['#4BEF8F', '#d62728', '#FFC83B', '#17becf', '#dbdb8d', '#D4484B', '#9edae5'],
+		palette = [
+			'#3DB6E6',
+			'#ED3780',
+			'#6B2E80',
+			'#dd604c',
+			'#2a318b',
+			'#990B75',
+			'#f86e00',
+			'#73EB91'
+		],
 		xValueSuffix = '',
 		yValueSuffix = '',
 		xValueCulling,
@@ -43,6 +50,7 @@
 		xValuePrecision = 2,
 		yValuePrecision = 2,
 		xValues,
+		hoverLineColor = '#f86e00',
 		paddingSides = {
 			top: 20,
 			bottom: 20,
@@ -204,8 +212,6 @@
 		return formatValue(value, yValuePrecision, yValueSuffix);
 	}
 
-	// ─── Tooltip state ───────────────────────────────────────────────────────────
-
 	let tooltip = $state<TooltipState | null>(null);
 	let hoveredValueIndex = $state<number | null>(null);
 
@@ -213,32 +219,22 @@
 		const svgElement = (event.currentTarget as SVGElement).ownerSVGElement;
 		if (!svgElement) return;
 		const svgBounds = svgElement.getBoundingClientRect();
+		const startLeft = event.clientX - svgBounds.left;
+		const pointerX = startLeft > chartWidth / 2 ? startLeft - 150 : startLeft + 20;
 		hoveredValueIndex = valueIndex;
 		tooltip = {
-			pointerX: event.clientX - svgBounds.left - 50,
-			pointerY: event.clientY - svgBounds.top,
+			pointerX: pointerX,
+			pointerY: event.clientY - svgBounds.top + 10,
 			xAxisValue: xAxisValues[valueIndex] ?? valueIndex,
 			entries: data
-				.filter((series) => series.values[valueIndex] !== undefined)
 				.map((series, seriesIndex) => ({
 					seriesLabel: series.label,
 					dataValue: series.values[valueIndex],
 					color: palette[seriesIndex % palette.length]
 				}))
+				.filter((series) => series.dataValue !== undefined)
 		};
 	}
-
-	// function handleColumnMouseMove(event: MouseEvent) {
-	// 	if (!tooltip) return;
-	// 	const svgElement = (event.currentTarget as SVGElement).ownerSVGElement;
-	// 	if (!svgElement) return;
-	// 	const svgBounds = svgElement.getBoundingClientRect();
-	// 	tooltip = {
-	// 		...tooltip,
-	// 		pointerX: event.clientX - svgBounds.left,
-	// 		pointerY: event.clientY - svgBounds.top
-	// 	};
-	// }
 
 	function handleMouseLeave() {
 		tooltip = null;
@@ -254,10 +250,10 @@
 		}))
 	);
 
-	// ─── Hover hit zones ─────────────────────────────────────────────────────────
-	// One invisible full-height strip per x-index. Each strip spans from the
-	// midpoint to the previous data point to the midpoint to the next, giving
-	// seamless coverage of the entire chart area with no gaps or overlaps.
+	/**
+	 * Barline hit zones
+	 * One invisible full-height strip per x-index.
+	 */
 	let hitZones = $derived.by(() =>
 		xAxisValues.map((_, index) => {
 			const currentPixelX = type === 'bar' ? barSlotCenterX(index) : scaleX(xAxisValues[index]);
@@ -276,7 +272,11 @@
 			const leftEdge = previousPixelX !== null ? (previousPixelX + currentPixelX) / 2 : chartLeft;
 			const rightEdge =
 				nextPixelX !== null ? (currentPixelX + nextPixelX) / 2 : chartLeft + chartWidth;
-			return { leftEdge, width: rightEdge - leftEdge, index };
+			return {
+				leftEdge,
+				width: rightEdge - leftEdge,
+				index
+			};
 		})
 	);
 </script>
@@ -445,23 +445,23 @@
 					y1={chartTop}
 					x2={scaleX(tooltip.xAxisValue)}
 					y2={chartTop + chartInnerHeight}
-					stroke="#ccc"
+					stroke={hoverLineColor}
 					stroke-width={1}
 					stroke-dasharray="4 4"
 				/>
 			{/if}
 			<!-- ── Hit zones: one invisible full-height strip per x-index ──────── -->
-			{#each hitZones as zone, zoneIndex (`barline-hit-zone-${zoneIndex}`)}
+			{#each hitZones as hitZone, hitZoneIndex (`barline-hit-zone-${hitZoneIndex}`)}
 				<rect
-					x={zone.leftEdge}
+					x={hitZone.leftEdge}
 					y={chartTop}
-					width={zone.width}
+					width={hitZone.width}
 					height={chartHeight}
 					role="button"
 					tabindex="-1"
 					fill="transparent"
 					class="hit-zone"
-					onmouseenter={(event) => onMouseOverColumn(event, zone.index)}
+					onmousemove={(e) => onMouseOverColumn(e, hitZoneIndex)}
 					onmouseleave={handleMouseLeave}
 				/>
 			{/each}
@@ -470,7 +470,7 @@
 		<!-- Display legend -->
 		{#if showLegend && legendItems.length}
 			{@const legendBaseY = chartHeight - padding.bottom + 10}
-			{@const legendItemWidth = 50}
+			{@const legendItemWidth = 100}
 			{@const itemsPerRow = Math.max(1, Math.floor(chartInnerWidth / legendItemWidth))}
 			{@const rowCount = Math.ceil(legendItems.length / itemsPerRow)}
 			{#each legendItems as item, itemIndex (`legend-item-${itemIndex}`)}
@@ -484,7 +484,7 @@
 					columnIndex * legendItemWidth}
 				{@const legendItemY = legendBaseY + rowIndex * 20}
 				<rect x={legendItemX} y={legendItemY - 6} width={15} height={15} rx={2} fill={item.color} />
-				<text x={legendItemX + 20} y={legendItemY} class="legend-label">
+				<text x={legendItemX + 20} y={legendItemY + 5} class="legend-label">
 					{item.label}
 				</text>
 			{/each}
@@ -494,7 +494,7 @@
 		<div
 			class="barline-tooltip"
 			style="
-      left: {tooltip?.pointerX + 10}px;
+      left: {tooltip?.pointerX}px;
       top: {tooltip?.pointerY}px;
       pointer-events: none;
     "
@@ -504,7 +504,7 @@
 				<dd class="barline-tooltip-data-series-list">
 					{#each tooltip.entries as dataSeries, seriesIndex (`data-series-tooltip-${seriesIndex}`)}
 						<dl>
-							<span style="color:{palette[seriesIndex % palette.length]}">&#9632; </span>
+							<span style="color:{dataSeries.color}">&#9632; </span>
 							<strong>
 								{dataSeries.seriesLabel}:
 								{formatYValue(dataSeries.dataValue)}

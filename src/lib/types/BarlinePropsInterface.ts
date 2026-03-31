@@ -24,6 +24,7 @@ export interface BarlinePropsInterface {
 	xValuePrecision?: number;
 	yValuePrecision?: number;
 	xValues?: number[];
+	hoverLineColor?: string;
 	paddingSides?: {
 		top: number;
 		bottom: number;
